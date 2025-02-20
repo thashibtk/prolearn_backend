@@ -1,12 +1,14 @@
+from django.shortcuts import get_object_or_404
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from rest_framework.permissions import AllowAny
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.core.mail import send_mail
+from rest_framework.decorators import api_view, permission_classes
 from .models import CustomUser, OTP
 from rest_framework.permissions import IsAuthenticated
-from .serializers import SignupSerializer, LoginSerializer, OTPSerializer, UserSerializer
+from .serializers import SignupSerializer, LoginSerializer, OTPSerializer, UserSerializer,AdminCreateUserSerializer
 import random
 
 # Generate JWT Token
@@ -76,174 +78,148 @@ class DashboardView(APIView):
     def get(self, request):
         return Response({"message": "Welcome to the Dashboard!", "user": request.user.email}, status=200)
     
+from django.contrib.auth import authenticate
+from rest_framework.permissions import AllowAny
+
+class AdminLoginView(APIView):
+    permission_classes = [AllowAny]  # This makes the endpoint public
+
+    def post(self, request):
+        email = request.data.get("email")
+        password = request.data.get("password")
+
+        # Authenticate user
+        user = authenticate(email=email, password=password)
+
+        if user is None or user.role != "admin":
+            return Response({"error": "Invalid Admin Credentials"}, status=status.HTTP_403_FORBIDDEN)
+
+        # Generate JWT tokens
+        refresh = RefreshToken.for_user(user)
+        return Response(
+            {
+                "tokens": {
+                    "refresh": str(refresh),
+                    "access": str(refresh.access_token),
+                },
+                "user": UserSerializer(user).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 
-
-# import json
-# from django.contrib.auth import get_user_model
-# from rest_framework.response import Response
-# from rest_framework import status, generics
-# from rest_framework_simplejwt.tokens import RefreshToken
-# from rest_framework.permissions import AllowAny
-# from .serializers import UserSerializer, LoginSerializer
-# from django.http import JsonResponse
-# from rest_framework.views import APIView
-# from rest_framework.permissions import IsAuthenticated
-
-# from django.shortcuts import get_object_or_404
-# from django.core.mail import send_mail
-# from .models import OTP
-# import random
-# from django.views.decorators.csrf import csrf_exempt
-# import logging
-
-# logger = logging.getLogger(__name__)
-
-
-# User = get_user_model()
-
-# def api_root(request):
-#     return JsonResponse({"message": "Welcome to the Auth API!", "endpoints": ["/register/", "/login/", "/logout/"]})
-
-# class ProtectedView(APIView):
-#     permission_classes = [IsAuthenticated]  # Requires Authentication
-
-#     def get(self, request):
-#         return Response({"message": "You are authenticated!"})
     
+@api_view(['POST'])
+@permission_classes([IsAuthenticated])
+def create_user(request):
+    if request.user.role != 'admin':
+        return Response({"error": "Only Admins can create users"}, status=status.HTTP_403_FORBIDDEN)
 
-# class UserDetailView(APIView):
-#     permission_classes = [IsAuthenticated]
+    serializer = AdminCreateUserSerializer(data=request.data)
+    if serializer.is_valid():
+        serializer.save()
+        return Response({"message": f"User {serializer.validated_data['role']} created successfully"}, status=status.HTTP_201_CREATED)
+    
+    return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
-#     def get(self, request):
-#         user = request.user
-#         return Response({
-#             "id": user.id,
-#             # "username": user.username,
-#             "email": user.email
-#         })
+@api_view(['GET'])
+@permission_classes([IsAuthenticated])
+def get_users(request):
+    if request.user.role != 'admin':
+        return Response({"error": "Only Admins can view users"}, status=status.HTTP_403_FORBIDDEN)
 
+    # Filter to include only mentors and project managers
+    users = CustomUser.objects.filter(role__in=["mentor", "project_manager"])  
 
-# class RegisterView(generics.CreateAPIView):
-#     queryset = User.objects.all()
-#     serializer_class = UserSerializer
-#     permission_classes = [AllowAny]
-
-#     def create(self, request, *args, **kwargs):
-#         print("Received Data:", request.data)
-#         serializer = self.get_serializer(data=request.data)
-#         if serializer.is_valid():
-#             return super().create(request, *args, **kwargs)
-#         else:
-#             print("Serializer Errors:", serializer.errors)
-#             return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
+    serializer = UserSerializer(users, many=True)
+    return Response(serializer.data)
 
 
+@api_view(['DELETE'])
+@permission_classes([IsAuthenticated])
+def delete_user(request, user_id):
+    if request.user.role != 'admin':
+        return Response({"error": "Only Admins can delete users"}, status=status.HTTP_403_FORBIDDEN)
 
-# @csrf_exempt
-# def send_otp(request):
-#     try:
-#         logger.info(f"Received request body: {request.body}")
+    try:
+        user = CustomUser.objects.get(id=user_id)
+        user.delete()
+        return Response({"message": "User deleted successfully"}, status=status.HTTP_204_NO_CONTENT)
+    except CustomUser.DoesNotExist:
+        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
+    
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def toggle_user_status(request, user_id):
+    if request.user.role != 'admin':
+        return Response({"error": "Only Admins can freeze/unfreeze users"}, status=status.HTTP_403_FORBIDDEN)
 
-#         if request.method == "POST":
-#             try:
-#                 data = json.loads(request.body)
-#                 email = data.get("email")
-#                 logger.info(f"Email received: {email}")
-#             except json.JSONDecodeError:
-#                 logger.error("Invalid JSON format")
-#                 return JsonResponse({"error": "Invalid JSON format"}, status=400)
+    try:
+        user = CustomUser.objects.get(id=user_id)
+        user.is_active = not user.is_active  # Toggle active status
+        user.save()
+        status_text = "frozen" if not user.is_active else "unfrozen"
+        return Response({"message": f"User {status_text} successfully"}, status=status.HTTP_200_OK)
+    except CustomUser.DoesNotExist:
+        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-#             if not email:
-#                 logger.error("Email is missing")
-#                 return JsonResponse({"error": "Email is required"}, status=400)
+@api_view(['PATCH'])
+@permission_classes([IsAuthenticated])
+def toggle_freeze_user(request, user_id):
+    if not request.user.is_staff:  # Ensure only admins can toggle freeze
+        return Response({"error": "Only admins can modify users"}, status=status.HTTP_403_FORBIDDEN)
 
-#             otp = random.randint(100000, 999999)  # Generate OTP
-#             OTP.objects.create(email=email, otp_code=otp)
+    try:
+        user = CustomUser.objects.get(id=user_id)
+        user.is_active = not user.is_active 
+        user.save()
+        return Response({"message": f"User {'frozen' if not user.is_active else 'unfrozen'} successfully"})
+    except CustomUser.DoesNotExist:
+        return Response({"error": "User not found"}, status=status.HTTP_404_NOT_FOUND)
 
-#             send_mail(
-#                 "Your OTP Code",
-#                 f"Your OTP code is {otp}.",
-#                 "pocker0272@gmail.com",  # ✅ Ensure this matches EMAIL_HOST_USER
-#                 [email],
-#                 fail_silently=False,
-#             )
+    
+class AdminLogoutView(APIView):
+    permission_classes = [IsAuthenticated]
 
-#             logger.info(f"OTP sent to {email}")
-#             return JsonResponse({"message": "OTP sent successfully!"})
+    def post(self, request):
+        try:
+            refresh_token = request.data.get("refresh_token")
+            if not refresh_token:
+                return Response({"error": "Refresh token is required."}, status=400)
 
-#         return JsonResponse({"error": "Invalid request method"}, status=400)
+            token = RefreshToken(refresh_token)
+            token.blacklist()  # Blacklist the token
+            return Response({"message": "Admin logged out successfully."}, status=200)
+        except Exception as e:
+            return Response({"error": str(e)}, status=400)
+            
+class AdminProfileView(APIView):
+    permission_classes = [IsAuthenticated]
 
-#     except Exception as e:
-#         logger.error(f"Error occurred: {str(e)}")
-#         return JsonResponse({"error": f"An error occurred: {str(e)}"}, status=500)
+    def get(self, request):
+        user = request.user
+        if user.is_staff: 
+            return Response({
+                "id": user.id,
+                "email": user.email,
+                "full_name": user.full_name,
+                "role": "admin"
+            })
+        return Response({"error": "Not an admin"}, status=403)
+    
+class UpdateUserView(APIView):
+    permission_classes = [IsAuthenticated]
 
-# @csrf_exempt  # Add this
-# def verify_otp(request):
-#     """Verify OTP entered by user."""
-#     if request.method == "POST":
-#         try:
-#             data = json.loads(request.body)
-#             email = data.get("email")
-#             otp_code = data.get("otp_code")
+    def put(self, request, user_id):
+        # Ensure only admins can update users
+        if request.user.role != 'admin':
+            return Response({"error": "Only Admins can update users"}, status=status.HTTP_403_FORBIDDEN)
 
-#             if not email or not otp_code:
-#                 return JsonResponse({"error": "Email and OTP code are required."}, status=400)
+        user = get_object_or_404(CustomUser, id=user_id)  # Get user by ID
+        serializer = UserSerializer(user, data=request.data, partial=True)  # Allow partial updates
 
-#             # Use filter to get all OTPs for the email
-#             otp = OTP.objects.filter(email=email).order_by('-created_at').first()
+        if serializer.is_valid():
+            serializer.save()
+            return Response({"message": "User updated successfully", "user": serializer.data}, status=status.HTTP_200_OK)
 
-#             if not otp:
-#                 return JsonResponse({"error": "OTP not found for this email."}, status=400)
-
-#             # Check if OTP has expired
-#             if otp.is_expired():
-#                 return JsonResponse({"error": "OTP has expired"}, status=400)
-
-#             if otp.otp_code == otp_code:
-#                 otp.delete()  # Remove OTP after successful verification
-#                 return JsonResponse({"message": "OTP verified successfully"}, status=200)
-#             else:
-#                 return JsonResponse({"error": "Invalid OTP"}, status=400)
-#         except json.JSONDecodeError:
-#             return JsonResponse({"error": "Invalid JSON format"}, status=400)
-
-#     return JsonResponse({"error": "Invalid request method"}, status=400)
-
-
-# class LoginView(generics.GenericAPIView):
-#     serializer_class = LoginSerializer
-#     permission_classes = [AllowAny]
-
-#     def post(self, request, *args, **kwargs):
-#         print("Received Login Data:", request.data)  # ✅ Log input
-#         serializer = self.get_serializer(data=request.data)
-
-#         if not serializer.is_valid():
-#             print("Serializer Errors:", serializer.errors)  # ✅ Log validation errors
-#             return Response({"error": serializer.errors}, status=status.HTTP_400_BAD_REQUEST)
-
-#         user = serializer.validated_data  # ✅ Should be a User object
-#         print("Authenticated User:", user)
-
-#         refresh = RefreshToken.for_user(user)
-#         return Response({
-#             "refresh": str(refresh),
-#             "access": str(refresh.access_token),
-#         })
-
-# class LogoutView(generics.GenericAPIView):
-#     def post(self, request):
-#         try:
-#             token = request.data.get("refresh")
-#             RefreshToken(token).blacklist()
-#             return Response({"message": "Logged out"}, status=status.HTTP_205_RESET_CONTENT)
-#         except:
-#             return Response({"error": "Invalid token"}, status=status.HTTP_400_BAD_REQUEST)
-
-
-# class DashboardView(APIView):
-#     permission_classes = [IsAuthenticated]
-
-#     def get(self, request):
-#         return Response({"message": "Welcome to the dashboard!"})
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)

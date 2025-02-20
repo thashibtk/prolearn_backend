@@ -6,7 +6,7 @@ import random
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
-        fields = ['id', 'email', 'full_name', 'role']
+        fields = ['id', 'email', 'full_name', 'role', 'is_active']
 
 class SignupSerializer(serializers.ModelSerializer):
     class Meta:
@@ -47,3 +47,25 @@ class OTPSerializer(serializers.ModelSerializer):
         except OTP.DoesNotExist:
             raise serializers.ValidationError("OTP not found")
         return data
+
+
+class AdminCreateUserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ['email', 'full_name', 'password', 'role']
+        extra_kwargs = {'password': {'write_only': True}}
+
+    def validate_role(self, value):
+        if value not in ['project_manager', 'mentor']:
+            raise serializers.ValidationError("Only 'team_lead' or 'mentor' can be created by Admins.")
+        return value
+
+    def create(self, validated_data):
+        user = CustomUser.objects.create_user(
+            email=validated_data['email'],
+            full_name=validated_data['full_name'],
+            password=validated_data['password']
+        )
+        user.role = validated_data['role']
+        user.save()
+        return user

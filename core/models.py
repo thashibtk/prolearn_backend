@@ -6,8 +6,8 @@ from datetime import timedelta
 # User roles
 USER_ROLES = (
     ('admin', 'Admin'),
-    ('team_lead', 'Team Lead'),
-    ('instructor', 'Instructor'),
+    ('project_manager', 'Project Manager'),
+    ('mentor', 'Mentor'),
     ('student', 'Student'),
 )
 
@@ -27,6 +27,7 @@ class CustomUserManager(BaseUserManager):
 
     def create_superuser(self, email, full_name, password):
         user = self.create_user(email, full_name, password)
+        user.role = "admin" 
         user.is_admin = True
         user.is_staff = True
         user.is_superuser = True
